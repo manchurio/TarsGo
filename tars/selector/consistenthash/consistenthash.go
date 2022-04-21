@@ -6,38 +6,45 @@ import (
 	"hash/crc32"
 	"sort"
 	"sync"
+
+	"github.com/TarsCloud/TarsGo/tars/selector"
+	"github.com/TarsCloud/TarsGo/tars/util/endpoint"
 )
 
 // ChMap consistent hash map
 type ChMap struct {
-	lock       *sync.RWMutex
+	sync.RWMutex
 	replicates int
 	sortedKeys []uint32
-	hashRing   map[uint32]KV
-	mapValues  map[string]bool
-}
-
-// KV is the key value type.
-type KV interface {
-	HashKey() string
+	hashRing   map[uint32]endpoint.Endpoint
+	mapValues  map[string]struct{}
 }
 
 // NewChMap  create a ChMap which has replicates of virtual nodes.
 func NewChMap(replicates int) *ChMap {
 	return &ChMap{
-		lock:       &sync.RWMutex{},
 		replicates: replicates,
-		hashRing:   make(map[uint32]KV),
-		mapValues:  make(map[string]bool),
+		hashRing:   make(map[uint32]endpoint.Endpoint),
+		mapValues:  make(map[string]struct{}),
 	}
 }
 
+func (c *ChMap) Select(msg selector.Message) (point endpoint.Endpoint, err error) {
+	var ok bool
+	point, ok = c.FindUint32(msg.HashCode())
+	if !ok {
+		return point, fmt.Errorf("consistenthash: select not found endpoint.Endpoint")
+	}
+	return point, nil
+}
+
 // Find finds a nodes to put the string key
-func (c *ChMap) Find(key string) (KV, bool) {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
+func (c *ChMap) Find(key string) (endpoint.Endpoint, bool) {
+	c.RLock()
+	defer c.RUnlock()
+	var point endpoint.Endpoint
 	if len(c.sortedKeys) == 0 {
-		return nil, false
+		return point, false
 	}
 	hashKey := crc32.ChecksumIEEE([]byte(key))
 	index := sort.Search(len(c.sortedKeys), func(x int) bool {
@@ -51,11 +58,12 @@ func (c *ChMap) Find(key string) (KV, bool) {
 }
 
 // FindUint32  finds a nodes to put the uint32 key
-func (c *ChMap) FindUint32(key uint32) (KV, bool) {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
+func (c *ChMap) FindUint32(key uint32) (endpoint.Endpoint, bool) {
+	c.RLock()
+	defer c.RUnlock()
+	var point endpoint.Endpoint
 	if len(c.sortedKeys) == 0 {
-		return nil, false
+		return point, false
 	}
 	index := sort.Search(len(c.sortedKeys), func(x int) bool {
 		return c.sortedKeys[x] >= key
@@ -68,11 +76,11 @@ func (c *ChMap) FindUint32(key uint32) (KV, bool) {
 }
 
 // Add : add the node to the hash ring
-func (c *ChMap) Add(node KV) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
+func (c *ChMap) Add(node endpoint.Endpoint) error {
+	c.Lock()
+	defer c.Unlock()
 	if _, ok := c.mapValues[node.HashKey()]; ok {
-		return errors.New("node already exists")
+		return errors.New("consistenthash: node already exists")
 	}
 	for i := 0; i < c.replicates; i++ {
 		virtualHost := fmt.Sprintf("%d#%s", i, node.HashKey())
@@ -83,16 +91,16 @@ func (c *ChMap) Add(node KV) error {
 	sort.Slice(c.sortedKeys, func(x int, y int) bool {
 		return c.sortedKeys[x] < c.sortedKeys[y]
 	})
-	c.mapValues[node.HashKey()] = true
+	c.mapValues[node.HashKey()] = struct{}{}
 	return nil
 }
 
-// Remove : remove the node and all the virtual nodes from the key
-func (c *ChMap) Remove(node KV) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
+// Remove the node and all the virtual nodes from the key
+func (c *ChMap) Remove(node endpoint.Endpoint) error {
+	c.Lock()
+	defer c.Unlock()
 	if _, ok := c.mapValues[node.HashKey()]; !ok {
-		return errors.New("host already removed")
+		return errors.New("consistenthash: host already removed")
 	}
 	delete(c.mapValues, node.HashKey())
 	for i := 0; i < c.replicates; i++ {

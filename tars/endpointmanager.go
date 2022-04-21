@@ -15,6 +15,7 @@ import (
 
 	"github.com/TarsCloud/TarsGo/tars/protocol/res/endpointf"
 	"github.com/TarsCloud/TarsGo/tars/protocol/res/queryf"
+	"github.com/TarsCloud/TarsGo/tars/selector"
 	"github.com/TarsCloud/TarsGo/tars/selector/consistenthash"
 	"github.com/TarsCloud/TarsGo/tars/util/endpoint"
 	"github.com/TarsCloud/TarsGo/tars/util/gtime"
@@ -84,11 +85,11 @@ func GetManager(comm *Communicator, objName string) EndpointManager {
 					newEps[i] = endpoint.Tars2endpoint(ep)
 				}
 				em.activeEp = newEps[:] // replace ep list
-				chmap := consistenthash.NewChMap(32)
+				chmap := consistenthash.NewChMap(selector.ConHashVirtualNodes)
 				for _, e := range em.activeEp {
 					chmap.Add(e)
 				}
-				em.activeEpHashMap = chmap
+				em.activeEpConHashMap = chmap
 				TLOG.Debugf("init endpoint %s %v %v", objName, em.activeEp, em.inactiveEpf)
 			}
 		}
@@ -170,10 +171,10 @@ type tarsEndpointManager struct {
 	checkAdapterList *sync.Map
 	checkAdapter     chan *AdapterProxy
 
-	activeEpHashMap *consistenthash.ChMap
-	freshLock       *sync.Mutex
-	lastInvoke      int64
-	invokeNum       int32
+	activeEpConHashMap *consistenthash.ChMap
+	freshLock          *sync.Mutex
+	lastInvoke         int64
+	invokeNum          int32
 }
 
 func newTarsEndpointManager(objName string, comm *Communicator) *tarsEndpointManager {
@@ -199,11 +200,11 @@ func newTarsEndpointManager(objName string, comm *Communicator) *tarsEndpointMan
 		}
 		e.activeEp = eps
 
-		chmap := consistenthash.NewChMap(32)
+		chmap := consistenthash.NewChMap(selector.ConHashVirtualNodes)
 		for _, e := range e.activeEp {
 			chmap.Add(e)
 		}
-		e.activeEpHashMap = chmap
+		e.activeEpConHashMap = chmap
 	} else {
 		// [proxy] TODO singleton
 		TLOG.Debug("proxy mode:", objName)
@@ -254,7 +255,7 @@ func (e *tarsEndpointManager) checkStatus() {
 				}
 				e.epLock.Unlock()
 
-				e.activeEpHashMap.Remove(ep)
+				e.activeEpConHashMap.Remove(ep)
 			}
 
 			if needCheck {
@@ -277,7 +278,7 @@ func (e *tarsEndpointManager) addAliveEp(ep endpoint.Endpoint) {
 		return crc32.ChecksumIEEE([]byte(sortedEps[i].Key)) < crc32.ChecksumIEEE([]byte(sortedEps[j].Key))
 	})
 	e.activeEp = sortedEps
-	e.activeEpHashMap.Add(ep)
+	e.activeEpConHashMap.Add(ep)
 	e.epLock.Unlock()
 }
 
@@ -301,21 +302,22 @@ func (e *tarsEndpointManager) SelectAdapterProxy(msg *Message) (*AdapterProxy, b
 	default:
 	}
 	var adp *AdapterProxy
-	if msg.isHash && msg.hashType == ConsistentHash {
-		if epi, ok := e.activeEpHashMap.FindUint32(uint32(msg.hashCode)); ok {
-			ep := epi.(endpoint.Endpoint)
-			if v, ok := e.epList.Load(ep.Key); ok {
+	if msg.isHash && msg.hashType == selector.ConsistentHash {
+		if epi, err := e.activeEpConHashMap.Select(msg); err != nil {
+			TLOG.Errorf("SelectAdapterProxy|ConsistentHash: %+v", err)
+		} else {
+			if v, ok := e.epList.Load(epi.Key); ok {
 				adp = v.(*AdapterProxy)
 			} else {
-				epf := endpoint.Endpoint2tars(ep)
+				epf := endpoint.Endpoint2tars(epi)
 				adp = NewAdapterProxy(e.objName, &epf, e.comm)
-				e.epList.Store(ep.Key, adp)
+				e.epList.Store(epi.Key, adp)
 			}
 		}
 	} else {
 		if len(eps) != 0 {
 			var index int
-			if msg.isHash && msg.hashType == ModHash {
+			if msg.isHash && msg.hashType == selector.ModHash {
 				index = int(msg.hashCode) % len(eps)
 			} else {
 				e.pos = (e.pos + 1) % int32(len(eps))
@@ -332,7 +334,7 @@ func (e *tarsEndpointManager) SelectAdapterProxy(msg *Message) (*AdapterProxy, b
 		}
 	}
 	if adp == nil && !e.directProxy {
-		// No any node is alive ,just select a random one.
+		// No any node is alive, just select a random one.
 		randomIndex := rand.Intn(len(e.activeEpf))
 		randomEpf := e.activeEpf[randomIndex]
 		randomEp := endpoint.Tars2endpoint(randomEpf)
@@ -454,7 +456,7 @@ func (e *tarsEndpointManager) findAndSetObj(q *queryf.QueryF) error {
 		return crc32.ChecksumIEEE([]byte(sortedEps[i].Key)) < crc32.ChecksumIEEE([]byte(sortedEps[j].Key))
 	})
 
-	chmap := consistenthash.NewChMap(32)
+	chmap := consistenthash.NewChMap(selector.ConHashVirtualNodes)
 	for _, e := range sortedEps {
 		chmap.Add(e)
 	}
@@ -463,7 +465,7 @@ func (e *tarsEndpointManager) findAndSetObj(q *queryf.QueryF) error {
 	e.activeEpf = activeEp
 	e.inactiveEpf = inactiveEp
 	e.activeEp = sortedEps
-	e.activeEpHashMap = chmap
+	e.activeEpConHashMap = chmap
 	e.epLock.Unlock()
 
 	TLOG.Debugf("findAndSetObj|activeEp: %+v", sortedEps)

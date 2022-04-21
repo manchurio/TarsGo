@@ -4,15 +4,7 @@ import (
 	"time"
 
 	"github.com/TarsCloud/TarsGo/tars/protocol/res/requestf"
-)
-
-// HashType is the hash type
-type HashType int
-
-// HashType enum
-const (
-	ModHash HashType = iota
-	ConsistentHash
+	"github.com/TarsCloud/TarsGo/tars/selector"
 )
 
 // Message is a struct contains servant information
@@ -28,7 +20,7 @@ type Message struct {
 	Status    int32
 
 	hashCode uint32
-	hashType HashType
+	hashType selector.HashType
 	isHash   bool
 }
 
@@ -48,8 +40,20 @@ func (m *Message) Cost() int64 {
 }
 
 // SetHash set hash code
-func (m *Message) SetHash(code uint32, h HashType) {
+func (m *Message) SetHash(code uint32, h selector.HashType) {
 	m.hashCode = code
 	m.hashType = h
 	m.isHash = true
+}
+
+func (m *Message) HashCode() uint32 {
+	return m.hashCode
+}
+
+func (m *Message) HashType() selector.HashType {
+	return m.hashType
+}
+
+func (m *Message) IsHash() bool {
+	return m.isHash
 }

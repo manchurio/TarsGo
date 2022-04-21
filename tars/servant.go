@@ -12,6 +12,7 @@ import (
 	"github.com/TarsCloud/TarsGo/tars/protocol"
 	"github.com/TarsCloud/TarsGo/tars/protocol/res/basef"
 	"github.com/TarsCloud/TarsGo/tars/protocol/res/requestf"
+	"github.com/TarsCloud/TarsGo/tars/selector"
 	"github.com/TarsCloud/TarsGo/tars/util/current"
 	"github.com/TarsCloud/TarsGo/tars/util/endpoint"
 	"github.com/TarsCloud/TarsGo/tars/util/rtimer"
@@ -159,7 +160,7 @@ func (s *ServantProxy) TarsInvoke(ctx context.Context, cType byte,
 	ok, hashType, hashCode, isHash := current.GetClientHash(ctx)
 	if ok {
 		msg.isHash = isHash
-		msg.hashType = HashType(hashType)
+		msg.hashType = selector.HashType(hashType)
 		msg.hashCode = hashCode
 	}
 	ok, to, isTimeout := current.GetClientTimeout(ctx)
